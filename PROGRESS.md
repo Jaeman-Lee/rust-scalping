@@ -1,5 +1,57 @@
 # 프로젝트 진행 기록
 
+## 2026-02-14 - 웹 대시보드 + 텔레그램 봇 구현 & 테스트넷 검증
+
+### 완료된 작업
+
+1. **Shared State 인프라 (Phase 1)**
+   - `src/dashboard/state.rs`: EngineState, DashboardEvent, 스냅샷 타입들
+   - `src/dashboard/mod.rs`: SharedState (`Arc<RwLock<EngineState>>`), EventSender 타입
+   - `src/trading/engine.rs`: SharedState/EventSender 통합, `update_shared_state()`, `is_paused` 지원
+   - `src/trading/risk.rs`: `consecutive_losses()`, `account_balance()` 등 getter 추가
+   - `src/config.rs`: DashboardConfig, TelegramConfig 추가 (`#[serde(default)]`)
+   - `Cargo.toml`: axum 0.7, tower-http 0.6, teloxide 0.13 추가
+
+2. **Axum 대시보드 API (Phase 2)**
+   - `src/dashboard/server.rs`: Axum 서버 (CORS, graceful shutdown)
+   - `src/dashboard/handlers.rs`: 5개 REST 엔드포인트 + WebSocket 핸들러
+   - 엔드포인트: `/api/status`, `/api/trades`, `/api/indicators`, `/api/balance`, `/api/ws`
+
+3. **텔레그램 봇 코드 (Phase 3)**
+   - `src/telegram/bot.rs`: teloxide 디스패처 + alert listener spawn
+   - `src/telegram/commands.rs`: 7개 명령어 (/status, /balance, /trades, /pnl, /start_bot, /stop_bot, /config)
+   - `src/telegram/alerts.rs`: DashboardEvent 구독 → 자동 알림 전송
+
+4. **Next.js 프론트엔드 (Phase 4)**
+   - `dashboard/`: Next.js 14 + TypeScript + Tailwind 프로젝트
+   - 컴포넌트: PriceChart, PositionCard, DailyStats, IndicatorPanel, RiskStatus, TradeTable, ConnectionStatus
+   - Hooks: useWebSocket (자동 재연결), useApi (REST 폴링)
+   - 3개 페이지: 메인 대시보드, 거래 내역, 설정
+
+5. **통합 & 설정 (Phase 5)**
+   - `config/default.toml`, `config/testnet.toml`: `[dashboard]`, `[telegram]` 섹션 추가
+   - `.env.example`: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID 추가
+   - `docker-compose.yml`: 포트 3001 노출, 텔레그램 환경변수 추가
+   - `CLAUDE.md` 전체 업데이트
+   - `docs/DASHBOARD_USER_GUIDE.md`, `docs/DASHBOARD_AGENT_GUIDE.md` 작성
+
+### 테스트넷 실행 검증 (2026-02-14)
+
+| 항목 | 결과 |
+|------|------|
+| Binance 테스트넷 연결 | OK |
+| WebSocket kline 스트림 | OK |
+| 히스토리 워밍업 (100캔들) | OK |
+| USDT 잔고 조회 | OK (10,000 USDT) |
+| 대시보드 API (curl) | OK (latency 0ms) |
+| Next.js 빌드 | OK (6 pages) |
+| Next.js dev 서버 | OK (포트 3000) |
+| API 프록시 (3000→3001) | OK |
+| `cargo test` | 41/41 통과 |
+| `cargo clippy` | 경고 0개 |
+
+---
+
 ## 2026-02-12 - 초기 구현 완료
 
 ### 완료된 작업
@@ -53,19 +105,21 @@
 
 10. **GitHub 푸시** → `git@github.com:beautifulNH/rust-scalping.git`
 
-### 검증 결과
+---
 
-| 항목 | 결과 |
-|------|------|
-| `cargo fmt --check` | ✅ 통과 |
-| `cargo clippy` | ✅ 경고 0개 |
-| `cargo test` | ✅ 41/41 통과 |
-| `cargo build --release` | ✅ 컴파일 성공 |
+## 다음 단계
 
-### 다음 단계
+### 즉시 진행 가능
+- [ ] **텔레그램 봇 실제 연동**: BotFather 토큰 발급 → .env 설정 → E2E 검증
+- [ ] `--dry-run` 모드 주문 분기 처리
 
-- [ ] Binance 테스트넷 API 키 발급 → `.env` 설정 → 실행 테스트
-- [ ] `--dry-run` 모드 실제 분기 처리 구현
-- [ ] 백테스트 기능 추가
+### 중기
+- [ ] 텔레그램 Chat ID 인증 (허용된 사용자만 명령)
+- [ ] 텔레그램 알림 레벨 설정
+- [ ] 대시보드 인증 (프로덕션용)
+- [ ] 백테스트 기능
+
+### 장기
 - [ ] 멀티 심볼 지원
-- [ ] 수익률 대시보드 / 텔레그램 알림
+- [ ] Rate limiting 구현
+- [ ] 수익률 차트 (일별/주별 히스토리)

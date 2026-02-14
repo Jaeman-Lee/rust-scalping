@@ -23,3 +23,7 @@ clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
 url = "2"
 anyhow = "1"
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+teloxide = { version = "0.13", features = ["macros"] }

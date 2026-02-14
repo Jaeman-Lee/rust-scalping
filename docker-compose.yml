@@ -2,7 +2,12 @@ services:
   bot:
     build: .
     env_file: .env
+    ports:
+      - "3001:3001"
     volumes:
       - ./config:/app/config
       - ./logs:/app/logs
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
     restart: unless-stopped

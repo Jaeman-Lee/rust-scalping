@@ -1,18 +1,22 @@
 mod config;
+mod dashboard;
 mod exchange;
 mod indicators;
 mod strategy;
+mod telegram;
 mod trading;
 mod utils;
 
 use crate::config::AppConfig;
+use crate::dashboard::state::{DashboardEvent, EngineState};
 use crate::exchange::client::BinanceClient;
 use crate::exchange::websocket::run_kline_stream;
 use crate::trading::engine::TradingEngine;
 use crate::utils::logger::{init_tracing, TradeLogger};
 use clap::Parser;
-use tokio::sync::{broadcast, watch};
-use tracing::{error, info};
+use std::sync::Arc;
+use tokio::sync::{broadcast, watch, RwLock};
+use tracing::{error, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(name = "scalping-bot", about = "Binance scalping trading bot")]
@@ -68,14 +72,69 @@ async fn main() -> anyhow::Result<()> {
     let (kline_tx, _) = broadcast::channel(256);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    // Create shared state and event sender for dashboard/telegram
+    let shared_state = Arc::new(RwLock::new(EngineState::new(
+        config.strategy.symbol.clone(),
+    )));
+    let (event_tx, _) = broadcast::channel::<DashboardEvent>(256);
+
     // Trade logger
     let trade_logger = TradeLogger::new(&config.logging.trade_log_path)?;
 
     // Trading engine
-    let mut engine = TradingEngine::new(config.clone(), client, trade_logger)?;
+    let mut engine = TradingEngine::new(
+        config.clone(),
+        client,
+        trade_logger,
+        shared_state.clone(),
+        event_tx.clone(),
+    )?;
 
     // Warm up indicators with historical data
     engine.warm_up().await?;
+
+    // Spawn dashboard server if enabled
+    if config.dashboard.enabled {
+        let dashboard_config = config.dashboard.clone();
+        let dashboard_state = shared_state.clone();
+        let dashboard_event_tx = event_tx.clone();
+        let dashboard_shutdown_rx = shutdown_rx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = dashboard::server::start_dashboard_server(
+                dashboard_config,
+                dashboard_state,
+                dashboard_event_tx,
+                dashboard_shutdown_rx,
+            )
+            .await
+            {
+                error!("Dashboard server error: {}", e);
+            }
+        });
+    }
+
+    // Spawn telegram bot if enabled
+    if config.telegram.enabled {
+        match (AppConfig::telegram_bot_token(), AppConfig::telegram_chat_id()) {
+            (Ok(token), Ok(chat_id)) => {
+                let tg_state = shared_state.clone();
+                let tg_event_tx = event_tx.clone();
+                let tg_config = config.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = telegram::bot::run_telegram_bot(
+                        token, chat_id, tg_state, tg_event_tx, tg_config,
+                    )
+                    .await
+                    {
+                        error!("Telegram bot error: {}", e);
+                    }
+                });
+            }
+            _ => {
+                warn!("Telegram enabled but TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set");
+            }
+        }
+    }
 
     // Spawn WebSocket stream
     let ws_config = config.clone();

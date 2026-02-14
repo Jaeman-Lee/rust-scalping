@@ -1,6 +1,6 @@
 [exchange]
 base_url = "https://testnet.binance.vision"
-ws_url = "wss://testnet.binance.vision/ws"
+ws_url = "wss://stream.testnet.binance.vision/ws"
 testnet = true
 
 [strategy]
@@ -25,3 +25,11 @@ max_daily_loss_pct = 2.0
 [logging]
 level = "debug"
 trade_log_path = "trades.csv"
+
+[dashboard]
+enabled = true
+port = 3001
+host = "0.0.0.0"
+
+[telegram]
+enabled = false

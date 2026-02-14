@@ -7,6 +7,10 @@ pub struct AppConfig {
     pub strategy: StrategyConfig,
     pub trading: TradingConfig,
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub dashboard: DashboardConfig,
+    #[serde(default)]
+    pub telegram: TelegramConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,6 +63,30 @@ pub struct LoggingConfig {
     pub trade_log_path: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct DashboardConfig {
+    pub enabled: bool,
+    pub port: u16,
+    pub host: String,
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 3001,
+            host: "0.0.0.0".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TelegramConfig {
+    pub enabled: bool,
+}
+
 impl AppConfig {
     pub fn load(config_path: &str) -> anyhow::Result<Self> {
         let path = Path::new(config_path);
@@ -77,6 +105,18 @@ impl AppConfig {
     pub fn secret_key() -> anyhow::Result<String> {
         std::env::var("BINANCE_SECRET_KEY")
             .map_err(|_| anyhow::anyhow!("BINANCE_SECRET_KEY environment variable not set"))
+    }
+
+    pub fn telegram_bot_token() -> anyhow::Result<String> {
+        std::env::var("TELEGRAM_BOT_TOKEN")
+            .map_err(|_| anyhow::anyhow!("TELEGRAM_BOT_TOKEN environment variable not set"))
+    }
+
+    pub fn telegram_chat_id() -> anyhow::Result<i64> {
+        std::env::var("TELEGRAM_CHAT_ID")
+            .map_err(|_| anyhow::anyhow!("TELEGRAM_CHAT_ID environment variable not set"))?
+            .parse::<i64>()
+            .map_err(|e| anyhow::anyhow!("TELEGRAM_CHAT_ID is not a valid integer: {}", e))
     }
 }
 

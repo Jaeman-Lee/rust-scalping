@@ -2,3 +2,11 @@
 .env
 *.log
 trades.csv
+
+# Dashboard
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+
+# Claude
+.claude/

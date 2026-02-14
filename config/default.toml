@@ -25,3 +25,11 @@ max_daily_loss_pct = 2.0
 [logging]
 level = "info"
 trade_log_path = "trades.csv"
+
+[dashboard]
+enabled = true
+port = 3001
+host = "0.0.0.0"
+
+[telegram]
+enabled = false

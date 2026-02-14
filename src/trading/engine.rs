@@ -1,6 +1,10 @@
 use chrono::Datelike;
 
 use crate::config::AppConfig;
+use crate::dashboard::state::{
+    DashboardEvent, IndicatorSnapshot, PositionSnapshot, RiskSnapshot, TradeSnapshot,
+};
+use crate::dashboard::{EventSender, SharedState};
 use crate::exchange::client::BinanceClient;
 use crate::exchange::models::WsKlineEvent;
 use crate::indicators::calculator::IndicatorCalculator;
@@ -23,6 +27,10 @@ pub struct TradingEngine {
     position: Option<Position>,
     trade_logger: TradeLogger,
     last_reset_day: u32,
+    shared_state: SharedState,
+    event_tx: EventSender,
+    total_wins: u32,
+    total_losses: u32,
 }
 
 impl TradingEngine {
@@ -30,6 +38,8 @@ impl TradingEngine {
         config: AppConfig,
         client: BinanceClient,
         trade_logger: TradeLogger,
+        shared_state: SharedState,
+        event_tx: EventSender,
     ) -> anyhow::Result<Self> {
         let calculator = IndicatorCalculator::new(
             config.strategy.ema_short,
@@ -51,6 +61,10 @@ impl TradingEngine {
             position: None,
             trade_logger,
             last_reset_day: Utc::now().ordinal(),
+            shared_state,
+            event_tx,
+            total_wins: 0,
+            total_losses: 0,
         })
     }
 
@@ -130,6 +144,16 @@ impl TradingEngine {
             self.position = None;
         }
 
+        // Update shared state on shutdown
+        {
+            let mut state = self.shared_state.write().await;
+            state.is_running = false;
+        }
+        let _ = self.event_tx.send(DashboardEvent::EngineStatusChanged {
+            is_running: false,
+            is_paused: false,
+        });
+
         info!(
             "Trading engine stopped. Daily stats: trades={}, pnl={:.4}",
             self.risk_manager.daily_trades(),
@@ -162,25 +186,87 @@ impl TradingEngine {
         // Update indicators
         let indicators = self.calculator.update(price);
 
+        // Check if paused
+        let is_paused = {
+            let state = self.shared_state.read().await;
+            state.is_paused
+        };
+
         // Generate signal
         let signal = self.strategy.evaluate(&indicators, self.position.as_ref());
 
-        match signal {
-            Signal::Buy(ref info) => {
-                info!("BUY signal: {}", info.reason);
-                self.execute_buy(price).await;
+        if !is_paused {
+            match signal {
+                Signal::Buy(ref info) => {
+                    info!("BUY signal: {}", info.reason);
+                    self.execute_buy(price).await;
+                }
+                Signal::Sell(ref info) => {
+                    info!("SELL signal: {}", info.reason);
+                    self.execute_sell(price).await;
+                }
+                Signal::Hold => {}
             }
-            Signal::Sell(ref info) => {
-                info!("SELL signal: {}", info.reason);
-                self.execute_sell(price).await;
-            }
-            Signal::Hold => {}
         }
+
+        // Update shared state after processing
+        self.update_shared_state(price, &indicators).await;
+    }
+
+    async fn update_shared_state(
+        &self,
+        price: f64,
+        indicators: &crate::indicators::calculator::IndicatorValues,
+    ) {
+        let indicator_snapshot = IndicatorSnapshot {
+            ema_short: indicators.ema_short,
+            ema_long: indicators.ema_long,
+            rsi: indicators.rsi,
+            bb_upper: indicators.bb_upper,
+            bb_middle: indicators.bb_middle,
+            bb_lower: indicators.bb_lower,
+        };
+
+        let position_snapshot = self.position.as_ref().map(|p| PositionSnapshot {
+            entry_price: p.entry_price,
+            quantity: p.quantity,
+            entry_time: p.entry_time,
+            unrealized_pnl: p.unrealized_pnl(price),
+            unrealized_pnl_pct: p.unrealized_pnl_pct(price),
+        });
+
+        {
+            let mut state = self.shared_state.write().await;
+            state.current_price = price;
+            state.indicators = Some(indicator_snapshot.clone());
+            state.position = position_snapshot;
+            state.risk = RiskSnapshot {
+                daily_trades: self.risk_manager.daily_trades(),
+                daily_pnl: self.risk_manager.daily_pnl(),
+                consecutive_losses: self.risk_manager.consecutive_losses(),
+                account_balance: self.risk_manager.account_balance(),
+                max_daily_trades: self.risk_manager.max_daily_trades(),
+                max_daily_loss_pct: self.risk_manager.max_daily_loss_pct(),
+                total_wins: self.total_wins,
+                total_losses: self.total_losses,
+            };
+            state.last_update = Utc::now();
+        }
+
+        // Broadcast price update event (ignore if no subscribers)
+        let _ = self.event_tx.send(DashboardEvent::PriceUpdate {
+            price,
+            symbol: self.config.strategy.symbol.clone(),
+            indicators: Some(indicator_snapshot),
+        });
     }
 
     async fn execute_buy(&mut self, price: f64) {
         if !self.risk_manager.can_trade() {
             warn!("Risk manager blocked trade");
+            let _ = self.event_tx.send(DashboardEvent::RiskAlert {
+                message: "Risk manager blocked BUY trade".to_string(),
+            });
             return;
         }
 
@@ -194,6 +280,23 @@ impl TradingEngine {
             Ok(order) => {
                 info!("BUY order filled: id={}", order.order_id);
                 self.position = Some(Position::new(price, quantity, Utc::now()));
+
+                let trade = TradeSnapshot {
+                    side: "BUY".to_string(),
+                    entry_price: price,
+                    exit_price: 0.0,
+                    quantity,
+                    pnl: 0.0,
+                    pnl_pct: 0.0,
+                    timestamp: Utc::now(),
+                };
+                let _ = self.event_tx.send(DashboardEvent::TradeExecuted {
+                    trade: trade.clone(),
+                });
+                {
+                    let mut state = self.shared_state.write().await;
+                    state.push_trade(trade);
+                }
             }
             Err(e) => {
                 error!("BUY order failed: {}", e);
@@ -219,6 +322,30 @@ impl TradingEngine {
                 );
 
                 self.risk_manager.record_trade(pnl);
+
+                if pnl >= 0.0 {
+                    self.total_wins += 1;
+                } else {
+                    self.total_losses += 1;
+                }
+
+                let trade = TradeSnapshot {
+                    side: "SELL".to_string(),
+                    entry_price: position.entry_price,
+                    exit_price: price,
+                    quantity: position.quantity,
+                    pnl,
+                    pnl_pct,
+                    timestamp: Utc::now(),
+                };
+
+                let _ = self.event_tx.send(DashboardEvent::TradeExecuted {
+                    trade: trade.clone(),
+                });
+                {
+                    let mut state = self.shared_state.write().await;
+                    state.push_trade(trade);
+                }
 
                 if let Err(e) = self.trade_logger.log_trade(&TradeRecord {
                     symbol: &self.config.strategy.symbol,

@@ -101,6 +101,22 @@ impl RiskManager {
     pub fn daily_trades(&self) -> u32 {
         self.daily_trades
     }
+
+    pub fn consecutive_losses(&self) -> u32 {
+        self.consecutive_losses
+    }
+
+    pub fn account_balance(&self) -> f64 {
+        self.account_balance
+    }
+
+    pub fn max_daily_trades(&self) -> u32 {
+        self.config.max_daily_trades
+    }
+
+    pub fn max_daily_loss_pct(&self) -> f64 {
+        self.config.max_daily_loss_pct
+    }
 }
 
 #[cfg(test)]
