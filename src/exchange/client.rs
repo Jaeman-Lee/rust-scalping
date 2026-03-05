@@ -216,6 +216,35 @@ impl BinanceClient {
         }
 
         let raw: Vec<Vec<serde_json::Value>> = resp.json().await?;
+        Self::parse_klines_raw(raw)
+    }
+
+    pub async fn get_klines_range(
+        &self,
+        symbol: &str,
+        interval: &str,
+        start_time: u64,
+        end_time: u64,
+        limit: u32,
+    ) -> anyhow::Result<Vec<Kline>> {
+        let url = format!(
+            "{}/api/v3/klines?symbol={}&interval={}&startTime={}&endTime={}&limit={}",
+            self.base_url, symbol, interval, start_time, end_time, limit
+        );
+
+        let resp = self.client.get(&url).send().await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Get klines range failed: {} - {}", status, body);
+        }
+
+        let raw: Vec<Vec<serde_json::Value>> = resp.json().await?;
+        Self::parse_klines_raw(raw)
+    }
+
+    fn parse_klines_raw(raw: Vec<Vec<serde_json::Value>>) -> anyhow::Result<Vec<Kline>> {
         let klines: Vec<Kline> = raw
             .into_iter()
             .filter_map(|k| {

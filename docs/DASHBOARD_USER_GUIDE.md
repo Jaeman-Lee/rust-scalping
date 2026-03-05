@@ -1,6 +1,6 @@
 # Rust Scalping Bot - 사용자 가이드
 
-> 최종 업데이트: 2026-02-14
+> 최종 업데이트: 2026-02-20
 
 ---
 
@@ -16,6 +16,7 @@
 | Next.js 프론트엔드 | **완료, 검증됨** | 포트 3000, 실시간 차트/지표 |
 | 텔레그램 봇 코드 | **완료 (미연동)** | teloxide 기반, 실제 봇 토큰 연결 필요 |
 | 리스크 관리 | **완료** | 일일한도, 연속손실, 포지션크기 |
+| 백테스트 모듈 | **완료** | 과거 데이터 기반 전략 시뮬레이션 + 수수료 반영 |
 | CI/CD | **완료** | GitHub Actions (fmt, clippy, test, build) |
 
 ### 테스트넷 실행 검증 결과 (2026-02-14)
@@ -194,7 +195,83 @@ enabled = true
 
 ---
 
-## 4. 매매 전략
+## 4. 백테스트
+
+> 과거 데이터를 기반으로 매매 전략의 수익성을 검증합니다. 수수료 반영, 일일 리셋, 리스크 관리 모두 라이브 엔진과 동일하게 동작합니다.
+
+### 실행 방법
+
+```bash
+# 기본 실행 (최근 1개월, 수수료 0.1%, 초기 잔고 $10,000)
+cargo run -- backtest --config config/default.toml \
+  --start 2025-01-01 --end 2025-02-01
+
+# 수수료율/초기잔고 커스텀 + CSV 출력
+cargo run -- backtest --config config/default.toml \
+  --start 2025-06-01 --end 2025-07-01 \
+  --fee-rate 0.075 --initial-balance 50000 \
+  --output backtest_result.csv
+
+# 짧은 기간 테스트 (1주일)
+cargo run -- backtest --config config/testnet.toml \
+  --start 2025-12-01 --end 2025-12-08
+```
+
+### CLI 옵션
+
+| 옵션 | 필수 | 기본값 | 설명 |
+|------|------|--------|------|
+| `--start` | O | - | 시작일 (YYYY-MM-DD) |
+| `--end` | O | - | 종료일 (YYYY-MM-DD) |
+| `--config` | X | `config/default.toml` | 설정 파일 (전략 파라미터 결정) |
+| `--fee-rate` | X | `0.1` | 수수료율 (%, 예: 0.1 = 0.1%) |
+| `--initial-balance` | X | `10000.0` | 시뮬레이션 초기 잔고 (USDT) |
+| `--output` | X | - | 거래 상세 CSV 파일 경로 |
+
+### 출력 예시
+
+```
+══════════════════════════════════════════
+  BACKTEST RESULTS: BTCUSDT (1m)
+  Period: 2025-01-01 ~ 2025-02-01
+  Candles: 44,640
+══════════════════════════════════════════
+  Initial Balance:  $10000.00
+  Final Balance:    $10487.00
+  Total Return:     +4.87%
+──────────────────────────────────────────
+  Total Trades:     142
+  Wins / Losses:    81 / 61
+  Win Rate:         57.04%
+  Avg Win:          +0.3200%
+  Avg Loss:         -0.2100%
+  Profit Factor:    1.44
+  Max Drawdown:     -1.23%
+  Sharpe Ratio:     1.82
+  Total Fees:       $28.40
+══════════════════════════════════════════
+```
+
+### CSV 출력 형식
+
+`--output` 옵션 사용 시 각 거래의 상세 기록이 CSV로 저장됩니다:
+
+```csv
+entry_time,exit_time,entry_price,exit_price,quantity,pnl,pnl_pct,fee,reason
+2025-01-03 14:22:00,2025-01-03 14:35:00,97250.00,97530.00,0.001000,0.2600,0.2674,0.1948,EMA cross up -> Take profit hit
+```
+
+### 참고사항
+
+- Binance API 키가 필요합니다 (데이터 조회용, 주문 실행 없음)
+- 캔들 종가를 체결가로 사용합니다 (슬리피지 미반영)
+- 수수료는 매수/매도 양쪽 모두 적용됩니다 (왕복 수수료)
+- 기간 종료 시 미청산 포지션은 강제 청산됩니다
+- Binance rate limit 준수를 위해 데이터 수집 시 요청 간 200ms 딜레이가 있습니다
+
+---
+
+## 5. 매매 전략
 
 ### 매수 조건 (3가지 모두 충족)
 1. EMA(9) > EMA(21) 크로스오버 (이전 캔들에서는 아래였음)
@@ -210,10 +287,10 @@ enabled = true
 
 ---
 
-## 5. 알려진 제한사항
+## 6. 알려진 제한사항
 
 - `--dry-run` 모드 미구현 (플래그만 파싱됨)
 - 멀티 심볼 미지원 (단일 페어만)
-- 백테스트 기능 없음
 - Rate limiting 미구현
 - 대시보드 인증 없음 (프로덕션 사용 시 추가 필요)
+- 백테스트 시 슬리피지 미반영 (캔들 종가 = 체결가)

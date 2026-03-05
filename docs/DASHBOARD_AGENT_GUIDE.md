@@ -1,6 +1,6 @@
 # Rust Scalping Bot - Claude Agent 가이드
 
-> 최종 업데이트: 2026-02-14
+> 최종 업데이트: 2026-02-20
 > 이 문서는 AI agent가 프로젝트를 즉시 이해하고 작업을 이어갈 수 있도록 작성됨.
 
 ---
@@ -11,12 +11,13 @@
 
 | 항목 | 파일 | 검증 |
 |------|------|------|
-| 매매 엔진 + SharedState 통합 | `src/trading/engine.rs` | cargo test 41/41 |
+| 매매 엔진 + SharedState 통합 | `src/trading/engine.rs` | cargo test 60/60 |
 | Axum REST API (5 엔드포인트) | `src/dashboard/handlers.rs`, `server.rs` | curl 테스트 OK |
 | WebSocket 이벤트 스트림 | `src/dashboard/handlers.rs::ws_handler` | 구조 완료 |
 | Next.js 프론트엔드 | `dashboard/` | npm run build OK, dev 서버 OK |
 | 텔레그램 봇 코드 | `src/telegram/` | 컴파일 OK |
 | 설정 구조 (dashboard/telegram) | `src/config.rs` | serde(default) 적용 |
+| 백테스트 모듈 | `src/backtest/` | cargo test 19개 (엔진 6 + 메트릭 13) |
 | 테스트넷 E2E | - | 2026-02-14 실행 검증 완료 |
 
 ### 다음 작업: 텔레그램 봇 실제 연동
@@ -41,11 +42,19 @@
 ## 아키텍처
 
 ```
+[Live Mode]
 TradingEngine ──writes──> Arc<RwLock<EngineState>> <──reads── Axum REST API
       │                                                       Axum WebSocket
       │                                                       Telegram commands
       └──sends──> broadcast<DashboardEvent> ──subscribes──> WS clients
                                                              Telegram alerts
+
+[Backtest Mode]
+BinanceClient.get_klines_range() → fetch_klines_paginated() → Vec<Kline>
+  → BacktestEngine.run(klines)
+    → IndicatorCalculator + ScalpingStrategy + RiskManager (재사용)
+    → 시뮬레이션 루프 (수수료 차감, 일일 리셋)
+    → BacktestResult → Display (터미널 출력) + CSV (선택)
 ```
 
 ### 데이터 흐름
@@ -71,8 +80,13 @@ WebSocket(kline) → broadcast → TradingEngine
 
 ```
 src/
-├── main.rs              # 엔트리포인트 + SharedState/EventSender 생성 + spawn
+├── main.rs              # 엔트리포인트 + CLI 서브커맨드 (Trade/Backtest) + spawn
 ├── config.rs            # AppConfig + DashboardConfig + TelegramConfig
+├── backtest/
+│   ├── mod.rs           # 모듈 선언
+│   ├── data.rs          # 페이지네이션 kline 수집 (1000개씩, 200ms 딜레이)
+│   ├── engine.rs        # BacktestEngine (시뮬레이션 루프 + 수수료 + 일일 리셋)
+│   └── metrics.rs       # BacktestResult, BacktestTrade, 지표 계산, Display/CSV
 ├── dashboard/
 │   ├── mod.rs           # SharedState = Arc<RwLock<EngineState>>, EventSender 타입
 │   ├── state.rs         # EngineState, DashboardEvent, *Snapshot 타입들
@@ -85,7 +99,7 @@ src/
 │   └── alerts.rs        # DashboardEvent 구독 → bot.send_message()
 ├── exchange/
 │   ├── auth.rs          # HMAC-SHA256 서명
-│   ├── client.rs        # BinanceClient (REST)
+│   ├── client.rs        # BinanceClient (REST) + get_klines_range()
 │   ├── models.rs        # API 타입들
 │   └── websocket.rs     # kline WebSocket 스트림
 ├── indicators/
@@ -163,6 +177,65 @@ pub fn new(
 ) -> anyhow::Result<Self>
 ```
 
+### CLI 구조 (`src/main.rs`)
+```rust
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,                          // None → Trade 모드 (하위 호환)
+    #[arg(short, long, default_value = "config/default.toml", global = true)]
+    config: String,
+    #[arg(long, default_value_t = false, global = true)]
+    dry_run: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Trade,
+    Backtest {
+        start: String,              // YYYY-MM-DD
+        end: String,                // YYYY-MM-DD
+        output: Option<String>,     // CSV 파일 경로
+        fee_rate: f64,              // 수수료율 (%, 기본 0.1)
+        initial_balance: f64,       // 초기 잔고 (기본 10000.0)
+    },
+}
+```
+
+### BacktestEngine (`src/backtest/engine.rs`)
+```rust
+pub struct BacktestEngine {
+    config: AppConfig,
+    fee_rate: f64,         // 0.001 = 0.1%
+    initial_balance: f64,
+}
+
+impl BacktestEngine {
+    pub fn run(&self, klines: &[Kline]) -> anyhow::Result<BacktestResult>
+}
+```
+
+**시뮬레이션 루프**: 기존 `TradingEngine::process_kline` 로직 미러링
+- `IndicatorCalculator` + `ScalpingStrategy` + `RiskManager` 재사용
+- 수수료: 매수/매도 양쪽 적용 (`entry_fee + exit_fee = price * qty * fee_rate * 2`)
+- 일일 리셋: 캔들 날짜 변경 시 `risk_manager.reset_daily()`
+- 종료: 미청산 포지션 강제 청산
+
+### BacktestResult (`src/backtest/metrics.rs`)
+```rust
+pub struct BacktestResult {
+    pub trades: Vec<BacktestTrade>,
+    pub equity_curve: Vec<f64>,
+    pub total_return_pct: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,       // 총 이익 / |총 손실|
+    pub max_drawdown_pct: f64,    // equity curve 기반
+    pub sharpe_ratio: f64,        // 연간화
+    pub total_fees: f64,
+    // ... 기타 메타데이터
+}
+```
+
 ---
 
 ## 설정 구조 (`src/config.rs`)
@@ -208,7 +281,7 @@ pub struct AppConfig {
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"  # WSL 환경 필수
 
-cargo test          # 41개 통과
+cargo test          # 60개 통과 (매매 41 + 백테스트 19)
 cargo clippy        # 경고 0개
 cargo build --release
 

@@ -15,7 +15,7 @@
 # 빌드 (Rust 1.70+ 필요)
 cargo build --release
 
-# 테스트 (41개)
+# 테스트 (60개)
 cargo test
 
 # 린트
@@ -32,8 +32,13 @@ cd dashboard && npm install && npm run dev
 
 ```
 src/
-├── main.rs              # 엔트리포인트 (CLI + 그레이스풀 셧다운 + 대시보드/텔레그램 spawn)
+├── main.rs              # 엔트리포인트 (CLI 서브커맨드: Trade/Backtest + 그레이스풀 셧다운)
 ├── config.rs            # TOML 설정 로드 + 환경변수 (DashboardConfig, TelegramConfig 포함)
+├── backtest/
+│   ├── mod.rs           # 모듈 선언
+│   ├── data.rs          # Binance API 페이지네이션 과거 데이터 수집
+│   ├── engine.rs        # 시뮬레이션 엔진 (기존 컴포넌트 재사용, 수수료 반영)
+│   └── metrics.rs       # 결과 집계 (승률, Profit Factor, MDD, Sharpe 등)
 ├── dashboard/
 │   ├── mod.rs           # SharedState, EventSender 타입 alias
 │   ├── state.rs         # EngineState, DashboardEvent, 스냅샷 타입들
@@ -148,6 +153,14 @@ cp .env.example .env
 # 테스트넷 실행 (대시보드 포트 3001 자동 시작)
 ./target/release/scalping-bot --config config/testnet.toml
 
+# 서브커맨드 없이도 동일 (하위 호환)
+./target/release/scalping-bot trade --config config/testnet.toml
+
+# 백테스트 실행
+./target/release/scalping-bot backtest --config config/default.toml \
+  --start 2025-01-01 --end 2025-02-01 \
+  --fee-rate 0.1 --output backtest_result.csv
+
 # Docker
 docker compose up -d
 
@@ -176,7 +189,7 @@ cd dashboard && npm install && npm run dev
 - [ ] 테스트넷 실제 실행 검증 필요
 - [ ] WebSocket 재연결 시 지표 상태 보존 검증
 - [ ] 멀티 심볼 지원 없음 (단일 페어만)
-- [ ] 백테스트 기능 없음
+- [x] 백테스트 기능 (`backtest` 서브커맨드로 구현됨)
 - [ ] Rate limiting 구현 미비 (요청 가중치 관리)
 - [ ] 대시보드 인증 없음 (프로덕션 사용 시 추가 필요)
 

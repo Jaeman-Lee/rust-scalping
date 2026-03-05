@@ -18,10 +18,7 @@ pub async fn run_alert_listener(
                 let text = match &event {
                     DashboardEvent::TradeExecuted { trade } => {
                         if trade.side == "BUY" {
-                            format!(
-                                "BUY {:.6} @ {:.2}",
-                                trade.quantity, trade.entry_price,
-                            )
+                            format!("BUY {:.6} @ {:.2}", trade.quantity, trade.entry_price,)
                         } else {
                             let emoji = if trade.pnl >= 0.0 { "+" } else { "" };
                             format!(
