@@ -1,6 +1,6 @@
 # Rust Scalping Bot - Claude Agent 가이드
 
-> 최종 업데이트: 2026-02-20
+> 최종 업데이트: 2026-03-06
 > 이 문서는 AI agent가 프로젝트를 즉시 이해하고 작업을 이어갈 수 있도록 작성됨.
 
 ---
@@ -11,13 +11,14 @@
 
 | 항목 | 파일 | 검증 |
 |------|------|------|
-| 매매 엔진 + SharedState 통합 | `src/trading/engine.rs` | cargo test 60/60 |
+| 매매 엔진 + SharedState 통합 | `src/trading/engine.rs` | cargo test 67/67 |
 | Axum REST API (5 엔드포인트) | `src/dashboard/handlers.rs`, `server.rs` | curl 테스트 OK |
 | WebSocket 이벤트 스트림 | `src/dashboard/handlers.rs::ws_handler` | 구조 완료 |
 | Next.js 프론트엔드 | `dashboard/` | npm run build OK, dev 서버 OK |
 | 텔레그램 봇 코드 | `src/telegram/` | 컴파일 OK |
 | 설정 구조 (dashboard/telegram) | `src/config.rs` | serde(default) 적용 |
 | 백테스트 모듈 | `src/backtest/` | cargo test 19개 (엔진 6 + 메트릭 13) |
+| Mean Reversion 전략 | `src/strategy/mean_reversion.rs` | cargo test 7개 |
 | 테스트넷 E2E | - | 2026-02-14 실행 검증 완료 |
 
 ### 다음 작업: 텔레그램 봇 실제 연동
@@ -52,7 +53,7 @@ TradingEngine ──writes──> Arc<RwLock<EngineState>> <──reads── Ax
 [Backtest Mode]
 BinanceClient.get_klines_range() → fetch_klines_paginated() → Vec<Kline>
   → BacktestEngine.run(klines)
-    → IndicatorCalculator + ScalpingStrategy + RiskManager (재사용)
+    → IndicatorCalculator + Strategy (Scalping/MeanReversion) + RiskManager (재사용)
     → 시뮬레이션 루프 (수수료 차감, 일일 리셋)
     → BacktestResult → Display (터미널 출력) + CSV (선택)
 ```
@@ -105,7 +106,8 @@ src/
 ├── indicators/
 │   └── calculator.rs    # EMA, RSI, BollingerBands 래퍼
 ├── strategy/
-│   ├── scalping.rs      # 매수/매도 조건 평가
+│   ├── scalping.rs      # Scalping 전략 (EMA 크로스오버)
+│   ├── mean_reversion.rs # Mean Reversion 전략 (BB + RSI 과매도)
 │   └── signals.rs       # Signal enum
 ├── trading/
 │   ├── engine.rs        # TradingEngine (SharedState/EventSender 통합)
@@ -216,7 +218,8 @@ impl BacktestEngine {
 ```
 
 **시뮬레이션 루프**: 기존 `TradingEngine::process_kline` 로직 미러링
-- `IndicatorCalculator` + `ScalpingStrategy` + `RiskManager` 재사용
+- `IndicatorCalculator` + `StrategyKind` (Scalping/MeanReversion) + `RiskManager` 재사용
+- 전략 선택: `config.strategy.strategy_type` → `StrategyKind` enum dispatch
 - 수수료: 매수/매도 양쪽 적용 (`entry_fee + exit_fee = price * qty * fee_rate * 2`)
 - 일일 리셋: 캔들 날짜 변경 시 `risk_manager.reset_daily()`
 - 종료: 미청산 포지션 강제 청산
@@ -281,7 +284,7 @@ pub struct AppConfig {
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"  # WSL 환경 필수
 
-cargo test          # 60개 통과 (매매 41 + 백테스트 19)
+cargo test          # 67개 통과 (매매 41 + 백테스트 19 + mean_reversion 7)
 cargo clippy        # 경고 0개
 cargo build --release
 

@@ -1,6 +1,6 @@
 # Rust Scalping Bot - 사용자 가이드
 
-> 최종 업데이트: 2026-02-20
+> 최종 업데이트: 2026-03-06
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 기능 | 상태 | 비고 |
 |------|------|------|
-| 스캘핑 매매 엔진 | **완료** | EMA/RSI/BB 기반 자동매매 |
+| 스캘핑 매매 엔진 | **완료** | EMA/RSI/BB 기반 자동매매 (2가지 전략 선택 가능) |
 | Binance 테스트넷 연동 | **완료, 검증됨** | WebSocket + REST API |
 | 웹 대시보드 API (Axum) | **완료, 검증됨** | 포트 3001, 5개 엔드포인트 |
 | Next.js 프론트엔드 | **완료, 검증됨** | 포트 3000, 실시간 차트/지표 |
@@ -273,17 +273,62 @@ entry_time,exit_time,entry_price,exit_price,quantity,pnl,pnl_pct,fee,reason
 
 ## 5. 매매 전략
 
-### 매수 조건 (3가지 모두 충족)
+config 파일의 `[strategy]` 섹션에서 `strategy_type`으로 전략을 선택합니다.
+
+### 전략 1: Scalping (기본값) — `strategy_type = "scalping"`
+
+**매수 조건 (3가지 모두 충족)**
 1. EMA(9) > EMA(21) 크로스오버 (이전 캔들에서는 아래였음)
 2. RSI < 70
 3. 가격이 볼린저밴드 하단 30% 이내 또는 중간선 위
 
-### 매도 조건 (하나라도 충족)
+**매도 조건 (하나라도 충족)**
 1. 손절: PnL <= -0.3%
 2. 익절: PnL >= +0.5%
 3. EMA(9) < EMA(21) 크로스다운
 4. RSI > 70
 5. 볼린저밴드 상단 5% 이내 도달
+
+### 전략 2: Mean Reversion — `strategy_type = "mean_reversion"`
+
+볼린저밴드 평균회귀 전략. 가격이 하단 밴드까지 떨어졌을 때 매수, 중간선(평균)으로 돌아올 때 매도합니다.
+
+**매수 조건 (2가지 모두 충족)**
+1. RSI < 30 (과매도 상태)
+2. 가격 ≤ 볼린저밴드 하단
+
+**매도 조건 (하나라도 충족)**
+1. 손절: PnL <= -stop_loss_pct
+2. 가격 ≥ 볼린저밴드 중간선 (평균회귀 목표)
+3. RSI > 70 (과매수)
+4. 가격 ≥ 볼린저밴드 상단
+
+### 전략 설정 예시
+
+```toml
+# config/mean_reversion.toml
+[strategy]
+strategy_type = "mean_reversion"
+symbol = "BTCUSDT"
+interval = "1m"
+rsi_oversold = 30.0
+rsi_overbought = 70.0
+stop_loss_pct = 0.5
+take_profit_pct = 1.0
+# ... 기타 지표 파라미터
+```
+
+### 전략 비교 백테스트
+
+```bash
+# Scalping 전략
+cargo run -- backtest --config config/default.toml \
+  --start 2025-01-01 --end 2025-02-01
+
+# Mean Reversion 전략
+cargo run -- backtest --config config/mean_reversion.toml \
+  --start 2025-01-01 --end 2025-02-01
+```
 
 ---
 

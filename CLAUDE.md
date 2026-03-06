@@ -6,8 +6,8 @@
 
 - **이름**: rust-scalping (Binance 스캘핑 자동매매 봇)
 - **언어**: Rust (edition 2021)
-- **저장소**: git@github.com:beautifulNH/rust-scalping.git
-- **상태**: 초기 구현 완료, 웹 대시보드 + 텔레그램 봇 추가됨, 테스트넷 실행 전 단계
+- **저장소**: git@github.com:Jaeman-Lee/rust-scalping.git
+- **상태**: 백테스트 + 멀티전략 구현 완료, 테스트넷 실행 전 단계
 
 ## 빌드 & 테스트
 
@@ -15,7 +15,7 @@
 # 빌드 (Rust 1.70+ 필요)
 cargo build --release
 
-# 테스트 (60개)
+# 테스트 (67개)
 cargo test
 
 # 린트
@@ -57,7 +57,8 @@ src/
 ├── indicators/
 │   └── calculator.rs    # 기술지표 래퍼 (EMA, RSI, 볼린저밴드)
 ├── strategy/
-│   ├── scalping.rs      # 스캘핑 전략 (매수/매도 조건 평가)
+│   ├── scalping.rs      # 스캘핑 전략 (EMA 크로스오버 기반)
+│   ├── mean_reversion.rs # 평균회귀 전략 (BB + RSI 기반)
 │   └── signals.rs       # Signal enum (Buy/Sell/Hold)
 ├── trading/
 │   ├── engine.rs        # 매매 엔진 (WebSocket→지표→시그널→주문 + SharedState 갱신)
@@ -122,7 +123,11 @@ WebSocket(kline) → broadcast channel → TradingEngine
 | `/stop_bot` | 매매 일시정지 |
 | `/config` | 현재 설정값 조회 |
 
-## 매매 전략 로직
+## 매매 전략
+
+설정 파일의 `strategy_type` 필드로 전략 선택 (기본값: `"scalping"`).
+
+### 1. Scalping (EMA 크로스오버) — `strategy_type = "scalping"`
 
 **매수 (3가지 모두 충족):**
 1. EMA(9) > EMA(21) 크로스오버 (이전에는 아래였음)
@@ -136,10 +141,23 @@ WebSocket(kline) → broadcast channel → TradingEngine
 4. RSI > 70
 5. 볼린저밴드 상단 5% 이내 도달
 
+### 2. Mean Reversion (볼린저밴드 평균회귀) — `strategy_type = "mean_reversion"`
+
+**매수 (2가지 모두 충족):**
+1. RSI < rsi_oversold (기본 30, 과매도)
+2. 가격 ≤ 볼린저밴드 하단
+
+**매도 (하나라도 충족):**
+1. 손절: PnL ≤ -stop_loss_pct
+2. 가격 ≥ 볼린저밴드 중간선 (평균회귀 목표)
+3. RSI > rsi_overbought (70)
+4. 가격 ≥ 볼린저밴드 상단
+
 ## 설정 파일
 
-- `config/default.toml` - 실거래 설정 (api.binance.com) + `[dashboard]`, `[telegram]`
-- `config/testnet.toml` - 테스트넷 설정 (testnet.binance.vision) + `[dashboard]`, `[telegram]`
+- `config/default.toml` - 실거래 설정 (scalping 전략, api.binance.com)
+- `config/testnet.toml` - 테스트넷 설정 (testnet.binance.vision)
+- `config/mean_reversion.toml` - 평균회귀 전략 설정
 - `.env` - API 키 + 텔레그램 토큰 (gitignore됨, `.env.example` 참고)
 
 ## 실행 방법
@@ -156,10 +174,15 @@ cp .env.example .env
 # 서브커맨드 없이도 동일 (하위 호환)
 ./target/release/scalping-bot trade --config config/testnet.toml
 
-# 백테스트 실행
+# 백테스트 실행 (scalping 전략)
 ./target/release/scalping-bot backtest --config config/default.toml \
   --start 2025-01-01 --end 2025-02-01 \
   --fee-rate 0.1 --output backtest_result.csv
+
+# 백테스트 실행 (mean_reversion 전략)
+./target/release/scalping-bot backtest --config config/mean_reversion.toml \
+  --start 2025-01-01 --end 2025-02-01 \
+  --fee-rate 0.1 --output backtest_mr.csv
 
 # Docker
 docker compose up -d
