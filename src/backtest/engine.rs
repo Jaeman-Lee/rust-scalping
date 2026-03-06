@@ -1,13 +1,28 @@
 use crate::backtest::metrics::{BacktestResult, BacktestTrade};
 use crate::config::AppConfig;
 use crate::exchange::models::Kline;
-use crate::indicators::calculator::IndicatorCalculator;
+use crate::indicators::calculator::{IndicatorCalculator, IndicatorValues};
+use crate::strategy::mean_reversion::MeanReversionStrategy;
 use crate::strategy::scalping::ScalpingStrategy;
 use crate::strategy::signals::Signal;
 use crate::trading::position::Position;
 use crate::trading::risk::RiskManager;
 use chrono::{DateTime, Datelike, TimeZone, Utc};
 use tracing::info;
+
+enum StrategyKind {
+    Scalping(ScalpingStrategy),
+    MeanReversion(MeanReversionStrategy),
+}
+
+impl StrategyKind {
+    fn evaluate(&self, indicators: &IndicatorValues, position: Option<&Position>) -> Signal {
+        match self {
+            StrategyKind::Scalping(s) => s.evaluate(indicators, position),
+            StrategyKind::MeanReversion(s) => s.evaluate(indicators, position),
+        }
+    }
+}
 
 pub struct BacktestEngine {
     config: AppConfig,
@@ -37,7 +52,18 @@ impl BacktestEngine {
             self.config.strategy.bollinger_std,
         )?;
 
-        let strategy = ScalpingStrategy::new(self.config.strategy.clone());
+        let strategy = match self.config.strategy.strategy_type.as_str() {
+            "mean_reversion" => {
+                info!("Using Mean Reversion strategy");
+                StrategyKind::MeanReversion(MeanReversionStrategy::new(
+                    self.config.strategy.clone(),
+                ))
+            }
+            _ => {
+                info!("Using Scalping (EMA crossover) strategy");
+                StrategyKind::Scalping(ScalpingStrategy::new(self.config.strategy.clone()))
+            }
+        };
         let mut risk_manager = RiskManager::new(self.config.trading.clone(), self.initial_balance);
 
         let mut balance = self.initial_balance;
@@ -200,6 +226,7 @@ mod tests {
                 bollinger_std: 2.0,
                 stop_loss_pct: 0.3,
                 take_profit_pct: 0.5,
+                strategy_type: "scalping".to_string(),
             },
             trading: TradingConfig {
                 quantity: 0.1,

@@ -156,6 +156,7 @@ mod tests {
             bollinger_std: 2.0,
             stop_loss_pct: 0.3,
             take_profit_pct: 0.5,
+            strategy_type: "scalping".to_string(),
         }
     }
 

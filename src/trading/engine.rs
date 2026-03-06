@@ -7,7 +7,8 @@ use crate::dashboard::state::{
 use crate::dashboard::{EventSender, SharedState};
 use crate::exchange::client::BinanceClient;
 use crate::exchange::models::WsKlineEvent;
-use crate::indicators::calculator::IndicatorCalculator;
+use crate::indicators::calculator::{IndicatorCalculator, IndicatorValues};
+use crate::strategy::mean_reversion::MeanReversionStrategy;
 use crate::strategy::scalping::ScalpingStrategy;
 use crate::strategy::signals::Signal;
 use crate::trading::orders::OrderManager;
@@ -18,10 +19,24 @@ use chrono::Utc;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
+enum LiveStrategy {
+    Scalping(ScalpingStrategy),
+    MeanReversion(MeanReversionStrategy),
+}
+
+impl LiveStrategy {
+    fn evaluate(&self, indicators: &IndicatorValues, position: Option<&Position>) -> Signal {
+        match self {
+            LiveStrategy::Scalping(s) => s.evaluate(indicators, position),
+            LiveStrategy::MeanReversion(s) => s.evaluate(indicators, position),
+        }
+    }
+}
+
 pub struct TradingEngine {
     config: AppConfig,
     client: BinanceClient,
-    strategy: ScalpingStrategy,
+    strategy: LiveStrategy,
     calculator: IndicatorCalculator,
     risk_manager: RiskManager,
     position: Option<Position>,
@@ -49,7 +64,16 @@ impl TradingEngine {
             config.strategy.bollinger_std,
         )?;
 
-        let strategy = ScalpingStrategy::new(config.strategy.clone());
+        let strategy = match config.strategy.strategy_type.as_str() {
+            "mean_reversion" => {
+                info!("Using Mean Reversion strategy");
+                LiveStrategy::MeanReversion(MeanReversionStrategy::new(config.strategy.clone()))
+            }
+            _ => {
+                info!("Using Scalping (EMA crossover) strategy");
+                LiveStrategy::Scalping(ScalpingStrategy::new(config.strategy.clone()))
+            }
+        };
         let risk_manager = RiskManager::new(config.trading.clone(), 0.0);
 
         Ok(Self {

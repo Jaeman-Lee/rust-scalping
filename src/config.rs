@@ -36,6 +36,8 @@ pub struct StrategyConfig {
     pub stop_loss_pct: f64,
     #[serde(default = "default_take_profit")]
     pub take_profit_pct: f64,
+    #[serde(default = "default_strategy_type")]
+    pub strategy_type: String,
 }
 
 fn default_stop_loss() -> f64 {
@@ -44,6 +46,10 @@ fn default_stop_loss() -> f64 {
 
 fn default_take_profit() -> f64 {
     0.5
+}
+
+fn default_strategy_type() -> String {
+    "scalping".to_string()
 }
 
 #[allow(dead_code)]
